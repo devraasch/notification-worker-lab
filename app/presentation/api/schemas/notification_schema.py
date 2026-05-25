@@ -20,5 +20,6 @@ class NotificationEventResponse(BaseModel):
     id: str
     notification_id: str
     event_type: str
+    event_version: int
     payload: dict
     created_at: datetime

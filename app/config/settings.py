@@ -6,6 +6,13 @@ class Settings:
         self.redis_host = os.getenv("REDIS_HOST", "localhost")
         self.redis_port = int(os.getenv("REDIS_PORT", "6379"))
         self.redis_password = os.getenv("REDIS_PASSWORD", "")
+
+        self.postgres_host = os.getenv("POSTGRES_HOST", "localhost")
+        self.postgres_port = int(os.getenv("POSTGRES_PORT", "5432"))
+        self.postgres_user = os.getenv("POSTGRES_USER", "notification")
+        self.postgres_password = os.getenv("POSTGRES_PASSWORD", "notification")
+        self.postgres_db = os.getenv("POSTGRES_DB", "notification_db")
+
         self.rabbitmq_host = os.getenv("RABBITMQ_HOST", "localhost")
         self.rabbitmq_port = int(os.getenv("RABBITMQ_PORT", "5672"))
         self.rabbitmq_username = os.getenv("RABBITMQ_USERNAME", "guest")
@@ -17,6 +24,13 @@ class Settings:
         if self.redis_password:
             return f"redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}/0"
         return f"redis://{self.redis_host}:{self.redis_port}/0"
+
+    @property
+    def database_url(self) -> str:
+        return (
+            f"postgresql+psycopg2://{self.postgres_user}:{self.postgres_password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
 
     @property
     def rabbitmq_url(self) -> str:

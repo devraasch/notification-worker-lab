@@ -6,7 +6,8 @@ from redis import Redis
 
 from app.config.settings import settings
 from app.domain.services.notification_service import NotificationService
-from app.infra.redis.redis_notification_event_repository import RedisNotificationEventRepository
+from app.infra.postgres.connection import run_migrations
+from app.infra.postgres.pg_notification_event_repository import PgNotificationEventRepository
 from app.infra.redis.redis_notification_repository import RedisNotificationRepository
 from app.infra.workers.notification_worker import NotificationWorker
 
@@ -20,9 +21,11 @@ logger = logging.getLogger(__name__)
 def main():
     logger.info("Iniciando Notification Worker...")
 
+    run_migrations()
+
     redis_client = Redis.from_url(settings.redis_url, decode_responses=True)
     repository = RedisNotificationRepository(redis_client)
-    event_repository = RedisNotificationEventRepository(redis_client)
+    event_repository = PgNotificationEventRepository()
     service = NotificationService(repository, event_repository)
     worker = NotificationWorker(service)
 

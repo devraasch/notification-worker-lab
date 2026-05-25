@@ -62,6 +62,7 @@ def get_notification_events(notification_id: str):
             id=e.id,
             notification_id=e.notification_id,
             event_type=e.event_type.value,
+            event_version=e.event_version,
             payload=e.payload,
             created_at=e.created_at,
         )

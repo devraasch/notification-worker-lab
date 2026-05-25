@@ -1,6 +1,6 @@
 # Notification Worker Lab
 
-Sistema de notificações assíncronas com **FastAPI**, **Redis**, **RabbitMQ** e um **Worker** de processamento.
+Sistema de notificações assíncronas com **FastAPI**, **Redis**, **RabbitMQ**, **PostgreSQL** e um **Worker** de processamento.
 
 ## Arquitetura
 
@@ -8,19 +8,60 @@ Sistema de notificações assíncronas com **FastAPI**, **Redis**, **RabbitMQ** 
 ┌──────────┐    POST /notifications    ┌───────────┐    publish    ┌────────────┐
 │  Client  │ ───────────────────────►  │  FastAPI   │ ──────────►  │  RabbitMQ  │
 └──────────┘                           │    API     │              └─────┬──────┘
-                                       └─────┬─────┘                    │
-                                             │ save                     │ consume
-                                             ▼                          ▼
-                                       ┌───────────┐            ┌────────────┐
-                                       │   Redis   │ ◄───────── │   Worker   │
-                                       │  (store)  │   update   │            │
-                                       └───────────┘            └────────────┘
+                                       └──┬────┬───┘                    │
+                                     save │    │ emit                   │ consume
+                                          ▼    ▼                        ▼
+                                    ┌───────┐ ┌──────────┐       ┌────────────┐
+                                    │ Redis │ │ Postgres │ ◄──── │   Worker   │
+                                    │ cache │ │  ledger  │ emit  │            │
+                                    └───────┘ └──────────┘       └─────┬──────┘
+                                        ▲                              │
+                                        └──────────────────────────────┘
+                                                    update
 ```
 
-**Fluxo:**
-1. O client envia um `POST /api/notifications/` com `title` e `message`
-2. A API salva a notificação no Redis com status `pending` e publica uma mensagem no RabbitMQ
-3. O Worker consome a fila, busca a notificação no Redis e atualiza o status para `sent`
+**Redis** = cache/projection (estado atual da notificação, leitura rápida)
+**PostgreSQL** = ledger append-only (histórico completo de eventos)
+
+## Ledger com PostgreSQL
+
+Os eventos da notificação são persistidos em uma tabela append-only no PostgreSQL.
+Redis é usado apenas como cache/projection para leitura rápida do estado atual.
+
+**Fluxo de eventos:**
+
+```
+created → processing → sent/failed
+```
+
+Cada mudança de status gera um evento imutável no ledger:
+
+```json
+[
+  { "event_type": "notification.created",    "event_version": 1, "payload": { "status": "pending" } },
+  { "event_type": "notification.processing", "event_version": 1, "payload": { "status": "pending" } },
+  { "event_type": "notification.sent",       "event_version": 1, "payload": { "status": "sent" } }
+]
+```
+
+**Tabela:**
+
+```sql
+CREATE TABLE notification_events (
+    id              UUID PRIMARY KEY,
+    notification_id UUID NOT NULL,
+    event_type      VARCHAR(50)  NOT NULL,
+    event_version   INTEGER      NOT NULL DEFAULT 1,
+    payload         JSONB        NOT NULL DEFAULT '{}',
+    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+```
+
+**Consultar eventos:**
+
+```bash
+curl http://localhost:8000/api/notifications/{id}/events
+```
 
 ## Estrutura do Projeto
 
@@ -28,15 +69,16 @@ Sistema de notificações assíncronas com **FastAPI**, **Redis**, **RabbitMQ** 
 app/
 ├── config/             # Configurações (variáveis de ambiente)
 ├── domain/
-│   ├── entities/       # Notification (dataclass)
-│   ├── enums/          # NotificationStatus
-│   ├── repositories/   # Interface abstrata do repositório
+│   ├── entities/       # Notification, NotificationEvent
+│   ├── enums/          # NotificationStatus, NotificationEventType
+│   ├── repositories/   # Interfaces abstratas (ABC)
 │   └── services/       # Lógica de negócio
 ├── application/
 │   ├── dto/            # Input/Output models (Pydantic)
 │   └── use_cases/      # Casos de uso (create, get)
 ├── infra/
-│   ├── redis/          # Implementação do repositório com Redis
+│   ├── redis/          # Repositório de notificações (cache)
+│   ├── postgres/       # Repositório de eventos (ledger)
 │   ├── rabbitmq/       # Publisher e Consumer
 │   └── workers/        # Notification Worker
 ├── presentation/
@@ -57,14 +99,15 @@ app/
 docker compose up --build -d
 ```
 
-Isso sobe 4 containers:
+Isso sobe 5 containers:
 
-| Serviço    | Porta  | Descrição                  |
-|------------|--------|----------------------------|
-| **api**    | 8000   | API FastAPI                |
-| **worker** | —      | Consumer RabbitMQ          |
-| **redis**  | 6379   | Armazenamento              |
-| **rabbitmq** | 5672 / 15672 | Fila + Management UI |
+| Serviço      | Porta          | Descrição                |
+|--------------|----------------|--------------------------|
+| **api**      | 8000           | API FastAPI              |
+| **worker**   | —              | Consumer RabbitMQ        |
+| **redis**    | 6379           | Cache/projection         |
+| **postgres** | 5432           | Ledger de eventos        |
+| **rabbitmq** | 5672 / 15672   | Fila + Management UI     |
 
 ## Endpoints
 
@@ -102,6 +145,14 @@ curl http://localhost:8000/api/notifications/status/sent
 
 Status disponíveis: `pending`, `sent`, `failed`
 
+### Auditoria — Eventos de uma Notificação
+
+```bash
+curl http://localhost:8000/api/notifications/{id}/events
+```
+
+Retorna o histórico completo de eventos (ledger) ordenados cronologicamente.
+
 ## RabbitMQ Management
 
 Acesse o painel em [http://localhost:15672](http://localhost:15672) com `guest` / `guest`.
@@ -113,6 +164,11 @@ Acesse o painel em [http://localhost:15672](http://localhost:15672) com `guest` 
 | `REDIS_HOST` | `localhost` | Host do Redis |
 | `REDIS_PORT` | `6379` | Porta do Redis |
 | `REDIS_PASSWORD` | — | Senha do Redis |
+| `POSTGRES_HOST` | `localhost` | Host do PostgreSQL |
+| `POSTGRES_PORT` | `5432` | Porta do PostgreSQL |
+| `POSTGRES_USER` | `notification` | Usuário PostgreSQL |
+| `POSTGRES_PASSWORD` | `notification` | Senha PostgreSQL |
+| `POSTGRES_DB` | `notification_db` | Nome do banco |
 | `RABBITMQ_HOST` | `localhost` | Host do RabbitMQ |
 | `RABBITMQ_PORT` | `5672` | Porta do RabbitMQ |
 | `RABBITMQ_USERNAME` | `guest` | Usuário RabbitMQ |
@@ -121,18 +177,6 @@ Acesse o painel em [http://localhost:15672](http://localhost:15672) com `guest` 
 | `RABBITMQ_QUEUE` | `notifications` | Nome da fila |
 | `RABBITMQ_EXCHANGE` | `notifications_exchange` | Nome do exchange |
 | `RABBITMQ_ROUTING_KEY` | `notification.created` | Routing key |
-
-## Parar os Containers
-
-```bash
-docker compose down
-```
-
-Para remover volumes (dados do Redis e RabbitMQ):
-
-```bash
-docker compose down -v
-```
 
 ## Teste de Idempotência
 
@@ -147,24 +191,14 @@ Resultado:
 
 Isso valida que o Worker está preparado para o modelo de entrega `at least once`, evitando reprocessamento indevido.
 
-## Ledger / Event Store
+## Parar os Containers
 
-O projeto registra o ciclo de vida da notificação como eventos append-only no Redis.
+```bash
+docker compose down
+```
 
-Exemplo:
+Para remover volumes (dados do Redis, PostgreSQL e RabbitMQ):
 
-```json
-[
-  {
-    "event_type": "notification.created",
-    "payload": { "status": "pending" }
-  },
-  {
-    "event_type": "notification.processing",
-    "payload": { "status": "processing" }
-  },
-  {
-    "event_type": "notification.sent",
-    "payload": { "status": "sent" }
-  }
-]
+```bash
+docker compose down -v
+```
