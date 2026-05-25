@@ -40,19 +40,15 @@ class NotificationWorker:
             return
 
         try:
-            logger.info(
-                "Processando notificação %s: %s",
-                notification.id,
-                notification.title,
-            )
+            self.notification_service.mark_as_processing(notification.id)
+            logger.info("Processando notificação %s: %s", notification.id, notification.title)
 
             self.notification_service.mark_as_sent(notification.id)
-
             logger.info("Notificação %s marcada como enviada", notification.id)
 
-        except Exception:
+        except Exception as exc:
             logger.exception("Falha ao processar notificação %s", notification.id)
-            self.notification_service.mark_as_failed(notification.id)
+            self.notification_service.mark_as_failed(notification.id, reason=str(exc))
 
     def run(self) -> None:
         logger.info("Iniciando notification worker...")

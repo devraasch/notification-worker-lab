@@ -146,3 +146,25 @@ Resultado:
 - status final da notificação: `sent`
 
 Isso valida que o Worker está preparado para o modelo de entrega `at least once`, evitando reprocessamento indevido.
+
+## Ledger / Event Store
+
+O projeto registra o ciclo de vida da notificação como eventos append-only no Redis.
+
+Exemplo:
+
+```json
+[
+  {
+    "event_type": "notification.created",
+    "payload": { "status": "pending" }
+  },
+  {
+    "event_type": "notification.processing",
+    "payload": { "status": "processing" }
+  },
+  {
+    "event_type": "notification.sent",
+    "payload": { "status": "sent" }
+  }
+]

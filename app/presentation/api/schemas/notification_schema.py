@@ -14,3 +14,11 @@ class NotificationResponse(BaseModel):
     message: str
     status: str
     created_at: datetime
+
+
+class NotificationEventResponse(BaseModel):
+    id: str
+    notification_id: str
+    event_type: str
+    payload: dict
+    created_at: datetime

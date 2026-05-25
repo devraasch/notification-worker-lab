@@ -12,6 +12,7 @@ from app.application.use_cases.get_notification import (
 from app.domain.enums.notification_status import NotificationStatus
 from app.presentation.api.dependencies import notification_service, publisher
 from app.presentation.api.schemas.notification_schema import (
+    NotificationEventResponse,
     NotificationRequest,
     NotificationResponse,
 )
@@ -47,3 +48,22 @@ def get_all_notifications():
 def get_all_notifications_by_status(status: NotificationStatus):
     use_case = GetAllNotificationsByStatusUseCase(notification_service)
     return use_case.execute(status)
+
+
+@router.get("/{notification_id}/events", response_model=List[NotificationEventResponse])
+def get_notification_events(notification_id: str):
+    notification = notification_service.get_notification_by_id(notification_id)
+    if notification is None:
+        raise HTTPException(status_code=404, detail="Notificação não encontrada")
+
+    events = notification_service.get_events(notification_id)
+    return [
+        NotificationEventResponse(
+            id=e.id,
+            notification_id=e.notification_id,
+            event_type=e.event_type.value,
+            payload=e.payload,
+            created_at=e.created_at,
+        )
+        for e in events
+    ]
